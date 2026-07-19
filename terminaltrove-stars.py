@@ -595,7 +595,7 @@ PAGE = r"""<!doctype html>
     <input id="q" type="search" placeholder="Filter by name, description, language, category…" aria-label="Filter tools">
     <select id="lang" aria-label="Filter by language"><option value="">All languages</option></select>
     <select id="cat" aria-label="Filter by category"><option value="">All categories</option></select>
-    <select id="year" class="wk" aria-label="Filter by year"><option value="">All years</option></select>
+    <select id="year" class="wk" aria-label="Filter by week or year"></select>
     <span id="count"></span>
   </div>
 
@@ -635,10 +635,22 @@ const fill = (sel, values) => {
 };
 fill($("lang"), DATA.map(d => d.language).filter(Boolean));
 fill($("cat"), DATA.flatMap(d => d.categories || []));
+// The archive's newest entry is the current pick; there is no separate
+// "is current" flag to read, so latest-wins is the definition.
+const LATEST = TOTW
+  ? DATA.map(d => d.totw).filter(Boolean).sort().pop() || ""
+  : "";
 if (TOTW) {
+  if (LATEST) $("year").add(new Option("This week — " + LATEST, "__week__"));
+  $("year").add(new Option("Last 4 weeks", "__recent__"));
+  $("year").add(new Option("All years", ""));
   [...new Set(DATA.map(d => (d.totw || "").slice(0, 4)).filter(Boolean))]
     .sort().reverse().forEach(y => $("year").add(new Option(y, y)));
 }
+
+const RECENT = TOTW
+  ? new Set(DATA.map(d => d.totw).filter(Boolean).sort().slice(-4))
+  : new Set();
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g,
   c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -681,7 +693,9 @@ function render() {
   const rows = DATA.filter(d => {
     if (lang && d.language !== lang) return false;
     if (cat && !(d.categories || []).includes(cat)) return false;
-    if (year && !(d.totw || "").startsWith(year)) return false;
+    if (year === "__week__") { if (d.totw !== LATEST) return false; }
+    else if (year === "__recent__") { if (!RECENT.has(d.totw)) return false; }
+    else if (year && !(d.totw || "").startsWith(year)) return false;
     if (!q) return true;
     return [d.name, d.description, d.tagline, d.language, d.repo, ...(d.categories || [])]
       .join(" ").toLowerCase().includes(q);
@@ -763,6 +777,12 @@ document.querySelectorAll("th[data-k]").forEach(th => {
   };
 });
 ["q", "lang", "cat", "year"].forEach(id => { $(id).oninput = render; });
+
+// The weekly page opens on the current pick; the archive is one select away.
+if (TOTW && LATEST) {
+  $("year").value = "__week__";
+  DATA.filter(d => d.totw === LATEST).forEach(d => open.add(d.slug));
+}
 render();
 </script>
 </body>
