@@ -463,7 +463,19 @@ PAGE = r"""<!doctype html>
   }
 
   .tablewrap { overflow-x: auto; }
-  table { border-collapse: collapse; width: 100%; min-width: 840px; }
+  /* Fixed layout is load-bearing: under auto layout the expanded detail row
+     (colspan, ~1200px-wide preview) feeds back into column sizing, narrowing
+     the description column so every row above it reflows taller and the page
+     appears to scroll. Fixed sizing decouples the two. */
+  table {
+    border-collapse: collapse; width: 100%; min-width: 840px;
+    table-layout: fixed;
+  }
+  th:nth-child(1) { width: 4.5rem; }   /* rank */
+  th:nth-child(2) { width: 7.5rem; }   /* featured week */
+  th:nth-child(3) { width: 12rem; }    /* stars */
+  th:nth-child(5) { width: 8.5rem; }   /* language */
+  th:nth-child(6) { width: 19rem; }    /* repository */
   th {
     text-align: left; padding: .85rem .7rem .5rem; cursor: pointer; user-select: none;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -480,9 +492,8 @@ PAGE = r"""<!doctype html>
   .rank {
     text-align: right; color: var(--faint);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: .78rem; font-variant-numeric: tabular-nums; width: 3.5rem;
+    font-size: .78rem; font-variant-numeric: tabular-nums;
   }
-  .starcell { width: 12rem; }
   .starnum {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: .85rem; font-variant-numeric: tabular-nums; font-weight: 600;
@@ -732,6 +743,26 @@ function render() {
   }).join("");
 }
 
+// Re-rendering replaces every row, so the clicked row is pinned to the pixel
+// it occupied before the toggle. Without this the viewport drifts by whatever
+// the layout above happens to change.
+function toggle(tr) {
+  const slug = tr.dataset.slug;
+  const before = tr.getBoundingClientRect().top;
+  // Read focus before rendering: the row is detached by then, which resets
+  // document.activeElement to <body>.
+  const hadFocus = tr.contains(document.activeElement);
+
+  open.has(slug) ? open.delete(slug) : open.add(slug);
+  render();
+
+  const after = $("rows").querySelector('tr.head[data-slug="' + slug + '"]');
+  if (!after) return;
+  const drift = after.getBoundingClientRect().top - before;
+  if (drift) window.scrollBy(0, drift);
+  if (hadFocus) after.focus({ preventScroll: true });
+}
+
 $("rows").addEventListener("click", e => {
   const chip = e.target.closest(".chip");
   if (chip) {
@@ -741,10 +772,7 @@ $("rows").addEventListener("click", e => {
   }
   if (e.target.closest("a")) return;          // let repo links through
   const tr = e.target.closest("tr.head");
-  if (!tr) return;
-  const slug = tr.dataset.slug;
-  open.has(slug) ? open.delete(slug) : open.add(slug);
-  render();
+  if (tr) toggle(tr);
 });
 
 $("rows").addEventListener("keydown", e => {
@@ -752,9 +780,7 @@ $("rows").addEventListener("keydown", e => {
   const tr = e.target.closest("tr.head");
   if (!tr) return;
   e.preventDefault();
-  const slug = tr.dataset.slug;
-  open.has(slug) ? open.delete(slug) : open.add(slug);
-  render();
+  toggle(tr);
 });
 
 document.querySelectorAll("th[data-k]").forEach(th => {
