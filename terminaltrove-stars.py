@@ -98,26 +98,62 @@ def catalogue(refresh: bool = False) -> list[dict]:
     return [docs[k] for k in sorted(docs)]
 
 
-def tool_of_the_week() -> dict[str, str]:
-    """Scrape the Tool of the Week archive into slug -> featured date (ISO).
+HUMAN_DATE = r"([A-Z][a-z]+ \d{1,2}, \d{4})"
 
-    The search index carries a tool_of_the_week flag but no date, and a tool's
-    date_created is when it was catalogued rather than when it was featured, so
-    this archive page is the only source for the actual week.
-    """
+
+def iso_date(text: str) -> str:
+    try:
+        return time.strftime("%Y-%m-%d", time.strptime(text, "%B %d, %Y"))
+    except ValueError:
+        return ""
+
+
+def featured_archive() -> dict[str, str]:
+    """The /tool-of-the-week/ archive: slug -> featured date (ISO)."""
     page = fetch(f"{SITE}/tool-of-the-week/")
     out: dict[str, str] = {}
     for item in re.findall(r'<li class="list-item">(.*?)</li>', page, re.S):
         link = re.search(r'href="/([a-z0-9][a-z0-9._-]*)/"', item)
-        when = re.search(r">([A-Z][a-z]+ \d{1,2}, \d{4})<", item)
-        if not (link and when):
-            continue
-        try:
-            stamp = time.strptime(when.group(1), "%B %d, %Y")
-        except ValueError:
-            continue
-        out[link.group(1)] = time.strftime("%Y-%m-%d", stamp)
+        when = re.search(rf">{HUMAN_DATE}<", item)
+        if link and when and iso_date(when.group(1)):
+            out[link.group(1)] = iso_date(when.group(1))
     return out
+
+
+def featured_recent() -> dict[str, str]:
+    """Badged picks off /new/, which Terminal Trove updates before the archive.
+
+    Only used to catch a pick the archive has not backfilled yet. Its headings
+    group by date *added*, which historically ran a day after the featured
+    Tuesday and only lines up in recent weeks, so these dates lose to the
+    archive wherever both know a tool.
+    """
+    page = fetch(f"{SITE}/new/")
+    # Only <h2> week headings: list items carry their own dates a day later,
+    # and a looser match silently attributes badges to the wrong week.
+    headings = [(m.start(), iso_date(m.group(1)))
+                for m in re.finditer(rf"<h2[^>]*>{HUMAN_DATE}</h2>", page)]
+    out: dict[str, str] = {}
+    badge = re.compile(
+        r"totw_new_tools_click_badge plausible-event-tool=([a-z0-9][a-z0-9._-]*)"
+    )
+    for hit in badge.finditer(page):
+        prior = [d for pos, d in headings if pos < hit.start() and d]
+        if prior:
+            out[hit.group(1)] = prior[-1]
+    return out
+
+
+def tool_of_the_week() -> dict[str, str]:
+    """Slug -> featured date, merged newest-source-first.
+
+    The search index carries a tool_of_the_week flag but no date, and a tool's
+    date_created is when it was catalogued rather than featured, so neither is
+    usable here.
+    """
+    weeks = featured_recent()
+    weeks.update(featured_archive())  # the dedicated archive wins any overlap
+    return weeks
 
 
 def category_slugs(refresh: bool = False) -> list[str]:
