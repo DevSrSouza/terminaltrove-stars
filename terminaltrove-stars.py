@@ -98,6 +98,28 @@ def catalogue(refresh: bool = False) -> list[dict]:
     return [docs[k] for k in sorted(docs)]
 
 
+def tool_of_the_week() -> dict[str, str]:
+    """Scrape the Tool of the Week archive into slug -> featured date (ISO).
+
+    The search index carries a tool_of_the_week flag but no date, and a tool's
+    date_created is when it was catalogued rather than when it was featured, so
+    this archive page is the only source for the actual week.
+    """
+    page = fetch(f"{SITE}/tool-of-the-week/")
+    out: dict[str, str] = {}
+    for item in re.findall(r'<li class="list-item">(.*?)</li>', page, re.S):
+        link = re.search(r'href="/([a-z0-9][a-z0-9._-]*)/"', item)
+        when = re.search(r">([A-Z][a-z]+ \d{1,2}, \d{4})<", item)
+        if not (link and when):
+            continue
+        try:
+            stamp = time.strptime(when.group(1), "%B %d, %Y")
+        except ValueError:
+            continue
+        out[link.group(1)] = time.strftime("%Y-%m-%d", stamp)
+    return out
+
+
 def category_slugs(refresh: bool = False) -> list[str]:
     index = cached_fetch(SITEMAP, refresh)
     out = set()
@@ -530,6 +552,26 @@ PAGE = r"""<!doctype html>
     cursor: pointer;
   }
   .chip:hover { color: var(--accent); border-color: var(--accent); }
+  body:not(.totw) .wk { display: none; }
+  .pagenav { display: flex; gap: .4rem; margin-top: .9rem; }
+  .pagenav a {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .78rem; padding: .3rem .65rem; border-radius: 6px;
+    border: 1px solid var(--line); color: var(--muted); text-decoration: none;
+  }
+  .pagenav a:hover { color: var(--accent); border-color: var(--accent); }
+  .pagenav a[aria-current] {
+    color: var(--accent); border-color: var(--accent); background: var(--chip);
+  }
+  td.wk {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .78rem; color: var(--muted); white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .overall {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .68rem; color: var(--faint); margin-left: .4rem;
+  }
   .empty { padding: 3rem 1rem; text-align: center; color: var(--faint); }
   footer {
     margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line);
@@ -538,31 +580,22 @@ PAGE = r"""<!doctype html>
   footer a { color: var(--accent); }
 </style>
 </head>
-<body>
+<body class="__BODYCLASS__">
 <div class="wrap">
   <header>
     <div class="eyebrow">Terminal Trove index</div>
-    <h1>Every tool, ranked by GitHub stars</h1>
-    <p class="lede">
-      __TOOLCOUNT__ tools from <a href="https://terminaltrove.com/" target="_blank" rel="noopener">terminaltrove.com</a>
-      resolved to a GitHub repository and sorted by star count. Click a row to
-      preview the tool, or a column heading to re-sort.
-    </p>
+    <h1>__HEADING__</h1>
+    <p class="lede">__LEDE__</p>
+    <nav class="pagenav">__NAV__</nav>
   </header>
 
-  <section class="stats">
-    <div class="stat"><b>__TOOLCOUNT__</b><span>Tools ranked</span></div>
-    <div class="stat"><b>__TOTALSTARS__</b><span>Stars combined</span></div>
-    <div class="stat"><b>__MEDIAN__</b><span>Median stars</span></div>
-    <div class="stat"><b>__TOPLANG__</b><span>Most common language</span></div>
-    <div class="stat"><b>__CATCOUNT__</b><span>Categories</span></div>
-    <div class="stat"><b>__GENERATED__</b><span>Generated</span></div>
-  </section>
+  <section class="stats">__STATS__</section>
 
   <div class="toolbar">
     <input id="q" type="search" placeholder="Filter by name, description, language, category…" aria-label="Filter tools">
     <select id="lang" aria-label="Filter by language"><option value="">All languages</option></select>
     <select id="cat" aria-label="Filter by category"><option value="">All categories</option></select>
+    <select id="year" class="wk" aria-label="Filter by year"><option value="">All years</option></select>
     <span id="count"></span>
   </div>
 
@@ -570,6 +603,7 @@ PAGE = r"""<!doctype html>
     <table>
       <thead><tr>
         <th data-k="rank" tabindex="0" scope="col">#</th>
+        <th data-k="totw" class="wk" tabindex="0" scope="col">Featured</th>
         <th data-k="stars" tabindex="0" scope="col">Stars</th>
         <th data-k="name" tabindex="0" scope="col">Tool</th>
         <th data-k="language" tabindex="0" scope="col">Language</th>
@@ -588,6 +622,7 @@ PAGE = r"""<!doctype html>
 
 <script>
 const DATA = __DATA__;
+const TOTW = __TOTW__;
 DATA.forEach((d, i) => { d.rank = i + 1; });
 
 const $ = id => document.getElementById(id);
@@ -600,6 +635,10 @@ const fill = (sel, values) => {
 };
 fill($("lang"), DATA.map(d => d.language).filter(Boolean));
 fill($("cat"), DATA.flatMap(d => d.categories || []));
+if (TOTW) {
+  [...new Set(DATA.map(d => (d.totw || "").slice(0, 4)).filter(Boolean))]
+    .sort().reverse().forEach(y => $("year").add(new Option(y, y)));
+}
 
 const esc = s => String(s ?? "").replace(/[&<>"]/g,
   c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -637,9 +676,12 @@ function render() {
   const q = $("q").value.trim().toLowerCase();
   const lang = $("lang").value, cat = $("cat").value;
 
+  const year = TOTW ? $("year").value : "";
+
   const rows = DATA.filter(d => {
     if (lang && d.language !== lang) return false;
     if (cat && !(d.categories || []).includes(cat)) return false;
+    if (year && !(d.totw || "").startsWith(year)) return false;
     if (!q) return true;
     return [d.name, d.description, d.tagline, d.language, d.repo, ...(d.categories || [])]
       .join(" ").toLowerCase().includes(q);
@@ -659,16 +701,20 @@ function render() {
     return '<tr class="head' + (on ? " open" : "") + '" data-slug="' + esc(d.slug) + '"'
       + ' tabindex="0" role="button" aria-expanded="' + on + '">'
       + '<td class="rank"><span class="twist">&#9656;</span> ' + d.rank + '</td>'
+      + '<td class="wk">' + esc(d.totw || "—") + '</td>'
       + '<td class="starcell"><span class="starnum">' + d.stars.toLocaleString() + '</span>'
       +   '<div class="track"><div class="fill" style="width:' + w.toFixed(1) + '%"></div></div></td>'
       + '<td><div class="name">' + esc(d.name)
-      +   (d.archived ? '<span class="tag">archived</span>' : '') + '</div>'
+      +   (d.archived ? '<span class="tag">archived</span>' : '')
+      +   (TOTW && d.overall ? '<span class="overall">#' + d.overall + ' overall</span>' : '')
+      +   '</div>'
       +   '<div class="desc">' + esc(d.description) + '</div></td>'
       + '<td class="lang">' + esc(d.language || "—") + '</td>'
       + '<td class="repo"><a href="https://github.com/' + esc(d.repo)
       +   '" target="_blank" rel="noopener">' + esc(d.repo) + '</a></td>'
       + '</tr>'
-      + (on ? '<tr class="detail"><td colspan="5">' + detail(d) + '</td></tr>' : "");
+      + (on ? '<tr class="detail"><td colspan="' + (TOTW ? 6 : 5) + '">'
+             + detail(d) + '</td></tr>' : "");
   }).join("");
 }
 
@@ -716,7 +762,7 @@ document.querySelectorAll("th[data-k]").forEach(th => {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(); }
   };
 });
-["q", "lang", "cat"].forEach(id => { $(id).oninput = render; });
+["q", "lang", "cat", "year"].forEach(id => { $(id).oninput = render; });
 render();
 </script>
 </body>
@@ -724,24 +770,82 @@ render();
 """
 
 
-def render(rows: list[dict], missing: list[dict], generated: str) -> str:
+def stat(value: str, label: str) -> str:
+    return f'<div class="stat"><b>{value}</b><span>{label}</span></div>'
+
+
+def nav(current: str) -> str:
+    here = ' aria-current="page"' if current == "index" else ""
+    there = ' aria-current="page"' if current == "week" else ""
+    return (
+        f'<a href="./"{here}>All tools</a>'
+        f'<a href="week.html"{there}>Tool of the Week</a>'
+    )
+
+
+def render(
+    rows: list[dict], missing: list[dict], generated: str, mode: str = "index"
+) -> str:
     stars = sorted(r["stars"] for r in rows)
     langs: dict[str, int] = {}
     for r in rows:
         if r["language"]:
             langs[r["language"]] = langs.get(r["language"], 0) + 1
     top_lang = max(langs.items(), key=lambda kv: kv[1])[0] if langs else "—"
-    skipped = (
-        f"{len(missing)} catalogued tools were skipped because they have no "
-        "public GitHub repository." if missing else ""
-    )
+    totw = mode == "week"
+
+    if totw:
+        weeks = sorted(r["totw"] for r in rows if r.get("totw"))
+        span = f"{weeks[0][:7]} → {weeks[-1][:7]}" if weeks else "—"
+        heading = "Tool of the Week, ranked by GitHub stars"
+        lede = (
+            f"Every tool Terminal Trove has featured since {weeks[0]}, ranked by "
+            "stars rather than by date. Sort by <em>Featured</em> for the "
+            "chronological archive, or filter to a single year."
+            if weeks else "The Tool of the Week archive."
+        )
+        stats = (
+            stat(f"{len(rows):,}", "Weeks featured")
+            + stat(f"{sum(stars):,}", "Stars combined")
+            + stat(f"{stars[len(stars) // 2]:,}" if stars else "0", "Median stars")
+            + stat(span, "Archive span")
+            + stat(html.escape(top_lang), "Most common language")
+            + stat(html.escape(generated), "Generated")
+        )
+        skipped = (
+            f"{len(missing)} featured tools are absent because they have no "
+            "public GitHub repository." if missing else ""
+        )
+    else:
+        heading = "Every tool, ranked by GitHub stars"
+        lede = (
+            f"{len(rows):,} tools from "
+            '<a href="https://terminaltrove.com/" target="_blank" rel="noopener">'
+            "terminaltrove.com</a> resolved to a GitHub repository and sorted by "
+            "star count. Click a row to preview the tool, or a column heading to "
+            "re-sort."
+        )
+        stats = (
+            stat(f"{len(rows):,}", "Tools ranked")
+            + stat(f"{sum(stars):,}", "Stars combined")
+            + stat(f"{stars[len(stars) // 2]:,}" if stars else "0", "Median stars")
+            + stat(html.escape(top_lang), "Most common language")
+            + stat(f"{len({c for r in rows for c in r['categories']})}", "Categories")
+            + stat(html.escape(generated), "Generated")
+        )
+        skipped = (
+            f"{len(missing)} catalogued tools were skipped because they have no "
+            "public GitHub repository." if missing else ""
+        )
+
     subs = {
         "__DATA__": json.dumps(rows, ensure_ascii=False),
-        "__TOOLCOUNT__": f"{len(rows):,}",
-        "__TOTALSTARS__": f"{sum(stars):,}",
-        "__MEDIAN__": f"{stars[len(stars) // 2]:,}" if stars else "0",
-        "__TOPLANG__": html.escape(top_lang),
-        "__CATCOUNT__": f"{len({c for r in rows for c in r['categories']})}",
+        "__TOTW__": "true" if totw else "false",
+        "__BODYCLASS__": "totw" if totw else "",
+        "__HEADING__": heading,
+        "__LEDE__": lede,
+        "__NAV__": nav(mode),
+        "__STATS__": stats,
         "__GENERATED__": html.escape(generated),
         "__SKIPPED__": html.escape(skipped),
     }
@@ -780,6 +884,10 @@ def main() -> int:
 
     print("Mapping categories…", file=sys.stderr)
     cats = category_map(set(slugs), args.refresh, args.workers)
+
+    print("Reading the Tool of the Week archive…", file=sys.stderr)
+    weeks = tool_of_the_week()
+    print(f"  {len(weeks)} weeks featured", file=sys.stderr)
 
     print("Fetching tool pages for repo links…", file=sys.stderr)
     parsed = collect_tools(slugs, args.refresh, args.workers)
@@ -820,6 +928,7 @@ def main() -> int:
             "description": (tool["description"] if tool else "")
                            or (node.get("description") or ""),
             "categories": cats.get(slug, []),
+            "totw": weeks.get(slug, ""),
         })
 
     # Two tools can point at one repo (forks, renames); keep the best-named entry.
@@ -839,18 +948,35 @@ def main() -> int:
         )
         print(f"  {got} previews, {size / 1_048_576:.1f} MB on disk", file=sys.stderr)
 
+    # Overall standing is what makes a featured tool's stars legible on the
+    # weekly page, so it is stamped before the list is narrowed.
+    for i, row in enumerate(rows, 1):
+        row["overall"] = i
+
     generated = time.strftime("%Y-%m-%d")
-    out.write_text(render(rows, missing, generated), encoding="utf-8")
+    out.write_text(render(rows, missing, generated, "index"), encoding="utf-8")
+
+    featured = [r for r in rows if r["totw"]]
+    never_ranked = sorted(set(weeks) - {r["slug"] for r in featured})
+    week_out = out.parent / "week.html"
+    week_out.write_text(
+        render(featured, never_ranked, generated, "week"), encoding="utf-8"
+    )
+
     if args.json:
         Path(args.json).write_text(
             json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8"
         )
 
     print(f"\nWrote {args.out} — {len(rows)} tools ranked.", file=sys.stderr)
+    print(f"Wrote {week_out} — {len(featured)} featured weeks.", file=sys.stderr)
     if missing:
         print(f"{len(missing)} tools had no resolvable GitHub repo.", file=sys.stderr)
-    for r in rows[:10]:
-        print(f"  {r['stars']:>7,}  {r['name']:<18} {r['repo']}", file=sys.stderr)
+    if never_ranked:
+        print(f"{len(never_ranked)} featured tools lack a repo: "
+              f"{', '.join(never_ranked)}", file=sys.stderr)
+    for r in featured[:5]:
+        print(f"  TOTW {r['totw']}  {r['stars']:>7,}  {r['name']}", file=sys.stderr)
     return 0
 
 

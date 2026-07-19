@@ -7,6 +7,13 @@ ranked by stars, with previews and the site's own categories.
 
 A GitHub Action rebuilds and republishes the page every second day.
 
+Two pages are produced:
+
+- **`index.html`** — every catalogued tool with a GitHub repository, ranked by stars.
+- **`week.html`** — the complete *Tool of the Week* archive, ranked by stars
+  instead of by date. Sort by **Featured** for the chronological view, filter to
+  a single year, and each entry shows where it places in the overall ranking.
+
 ## How the data is assembled
 
 No single endpoint has everything, so four sources are stitched together.
@@ -16,7 +23,8 @@ No single endpoint has everything, so four sources are stitched together.
 | 1 | `/search?q=*` | Typesense JSON. `q=*` matches the whole collection; `per_page` is clamped to 100, so ~10 requests returns every tool with its slug, tagline, language, license, OS list and preview image. |
 | 2 | `/categories/<slug>/` | 73 pages, each listing its full membership in one request. Inverted into a tool → category map. |
 | 3 | `/<slug>/` | The repository URL, which appears in **no** API. Each tool page embeds schema.org JSON-LD whose `sameAs` carries the GitHub link. |
-| 4 | GitHub GraphQL | Stars, forks, archived state, last push — batched 50 repos per query, so ~19 requests instead of ~930. |
+| 4 | `/tool-of-the-week/` | The featured-week archive. The search index flags tools of the week but carries no date, and `date_created` is when a tool was catalogued rather than featured — this page is the only source for the actual week. |
+| 5 | GitHub GraphQL | Stars, forks, archived state, last push — batched 50 repos per query, so ~19 requests instead of ~930. |
 
 Parsing JSON-LD rather than scraping markup means a CSS or layout change on
 Terminal Trove does not break this.
@@ -57,7 +65,10 @@ the stills while leaving the animated GIF demos intact.
 
 ## Caveats
 
-- Star counts are a snapshot from the moment the page was generated.
+- Star counts are a snapshot from the moment the page was generated. Historical
+  counts are not shown because GitHub no longer serves the stargazer timestamps
+  they would need — the `/stargazers` endpoint returns 404 for popular repos —
+  so a featured tool's stars are today's, not the week it was featured.
 - Tools with no public GitHub repository are excluded and counted in the footer.
 - Terminal Trove treats `linux`, `macos`, `windows`, `bsd` and `cross-platform`
   as categories alongside functional ones like `file-manager`, so they dominate
