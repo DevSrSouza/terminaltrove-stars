@@ -1,0 +1,83 @@
+name: Publish ranking
+
+on:
+  schedule:
+    # Every second day at 05:17 UTC. Off-the-hour to dodge the cron stampede
+    # that delays jobs scheduled at :00.
+    - cron: '17 5 */2 * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'terminaltrove-stars.py'
+      - '.github/workflows/publish.yml'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Tool pages are static and make up ~93% of the requests, so they are
+      # carried between runs. The catalogue and category pages are always
+      # fetched live by the script, so new tools still show up.
+      - name: Restore scraped page cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/terminaltrove-stars
+          key: tt-pages-${{ github.run_id }}
+          restore-keys: tt-pages-
+
+      - name: Build the ranking
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p site
+          python3 terminaltrove-stars.py \
+            --out site/index.html \
+            --json site/data.json
+
+      - name: Summarise
+        run: |
+          {
+            echo "### Terminal Trove ranking rebuilt"
+            echo ""
+            python3 - <<'PY'
+          import json
+          rows = json.load(open("site/data.json"))
+          print(f"- **{len(rows)}** tools ranked")
+          print(f"- **{sum(r['stars'] for r in rows):,}** stars combined")
+          print("")
+          print("| # | Tool | Stars |")
+          print("|---|------|-------|")
+          for i, r in enumerate(rows[:10], 1):
+              print(f"| {i} | {r['name']} | {r['stars']:,} |")
+          PY
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

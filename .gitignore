@@ -1,0 +1,16 @@
+# Generated output
+site/
+*.html
+data.json
+previews/
+
+# Local scrape cache
+.cache/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# macOS
+.DS_Store
